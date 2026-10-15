@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function settings() { return get(/databases/$(db)/documents/meta/settings).data; }
+    function isTeacher() {
+      return signedIn()
+        && exists(/databases/$(db)/documents/meta/settings)
+        && settings().teacherUid == request.auth.uid;
+    }
+
+    // 반 이름 등 기본 설정: 누구나 읽기, 처음 한 번만 만들기
+    match /meta/settings {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.teacherUid == request.auth.uid;
+      allow update, delete: if isTeacher();
+    }
+
+    // 학생·선생님 정보: 학생은 대결 결과(점수·전적)만 바꿀 수 있음
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, delete: if isTeacher();
+      allow update: if isTeacher()
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['rating', 'wins', 'losses', 'draws']));
+    }
+
+    // 문항: 선생님만 쓰기
+    match /questions/{qid} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+
+    // 대결: 선생님이 만들고, 대결 참가자는 진행 상황만 기록
+    match /matches/{mid} {
+      allow read: if signedIn();
+      allow create, delete: if isTeacher();
+      allow update: if isTeacher()
+        || (signedIn() && request.auth.uid in resource.data.players
+            && request.resource.data.players == resource.data.players
+            && request.resource.data.questions == resource.data.questions);
+    }
+  }
+}
